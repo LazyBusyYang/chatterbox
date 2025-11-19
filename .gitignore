@@ -46,3 +46,9 @@ checkpoints/
 
 # Ignore generated sample .wav files
 **/*.wav
+
+# Ignore weights
+weights/
+
+# Ignore logs
+logs/
