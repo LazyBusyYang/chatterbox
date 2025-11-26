@@ -28,6 +28,11 @@ audio_prompts = dict(
         language_id="zh",
         path="data/hutao_zh_6min.wav"
     ),
+    trump_en=dict(
+        name="特朗普-英文",
+        language_id="en",
+        path="data/trump_en_2min.wav"
+    ),
 )
 enable_cors = True
 host = '0.0.0.0'
