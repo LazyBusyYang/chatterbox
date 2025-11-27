@@ -61,4 +61,4 @@ RUN . /opt/miniconda/etc/profile.d/conda.sh && \
 WORKDIR /workspace/chatterbox
 
 # Set entrypoint
-ENTRYPOINT ["/bin/bash", "-c", "source /opt/miniconda/etc/profile.d/conda.sh && conda activate chatterbox && PYTHONPATH=/workspace/chatterbox python main.py --config_path dlp3d/online_config.py"]
+ENTRYPOINT ["/bin/bash", "-c", "source /opt/miniconda/etc/profile.d/conda.sh && conda activate chatterbox && PYTHONPATH=/workspace/chatterbox python dlp3d/main.py --config_path dlp3d/config.py"]

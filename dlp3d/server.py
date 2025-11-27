@@ -1,8 +1,10 @@
 import asyncio
 import io
+import os
 import time
 import wave
 from threading import Lock
+from urllib.parse import quote
 
 import torch
 import torchaudio as ta
@@ -48,7 +50,7 @@ class FastAPIServer:
 
     def __init__(
         self,
-        audio_prompts: dict[str, dict[str, str]],
+        audio_prompts_dir: str,
         checkpoint_dir: str | None = None,
         device: str | None = None,
         enable_cors: bool = False,
@@ -64,13 +66,12 @@ class FastAPIServer:
         registers event listeners, and initializes the TTS model.
 
         Args:
-            audio_prompts (dict[str, dict[str, str]]):
-                Dictionary mapping voice keys to voice configurations.
-                Each configuration should contain 'name', 'path', and
-                'language_id' keys.
+            audio_prompts_dir (str):
+                Directory path containing audio prompt files.
+                Files should be named as '{voice_key}_{language_id}.wav'.
             checkpoint_dir (str | None, optional):
-                Path to the checkpoint directory for loading the TTS model.
-                If None, uses pretrained model from HuggingFace.
+                Directory path to load TTS model checkpoint from.
+                If None, loads pretrained model from HuggingFace.
                 Defaults to None.
             device (str | None, optional):
                 Device to run the model on ('cuda', 'mps', or 'cpu').
@@ -83,9 +84,11 @@ class FastAPIServer:
             port (int, optional):
                 Port number to bind the server to. Defaults to 80.
             startup_event_listener (None | list, optional):
-                List of startup event listener functions. Defaults to None.
+                List of startup event listener functions.
+                Defaults to None.
             shutdown_event_listener (None | list, optional):
-                List of shutdown event listener functions. Defaults to None.
+                List of shutdown event listener functions.
+                Defaults to None.
             logger_cfg (None | dict, optional):
                 Logger configuration, see `setup_logger` for detailed
                 description. Logger name will use the class name.
@@ -99,7 +102,8 @@ class FastAPIServer:
             logger_cfg["logger_name"] = logger_name
         self.logger_cfg = logger_cfg
         self.logger = setup_logger(**logger_cfg)
-        self.audio_prompts = audio_prompts
+        self.audio_prompts_dir = audio_prompts_dir
+        self._load_audio_prompts()
         self.checkpoint_dir = checkpoint_dir
         self.device = device
         # for fastapi
@@ -125,6 +129,24 @@ class FastAPIServer:
         self.last_audio_prompt_key: str | None = None
         self.model_lock = Lock()
 
+    def _load_audio_prompts(self) -> None:
+        """TODO
+        """
+        self.audio_prompts = dict()
+        for file in os.listdir(self.audio_prompts_dir):
+            if file.endswith('.wav'):
+                file_name = file.split('.')[0]
+                splits = file_name.split('_')
+                if len(splits) != 2:
+                    self.logger.warning(f"Invalid file name: {file_name}, skipping")
+                    continue
+                voice_key, language_id = splits
+                self.audio_prompts[file_name] = dict(
+                    name=voice_key,
+                    language_id=language_id,
+                    path=os.path.join(self.audio_prompts_dir, file)
+                )
+
     def _build_tts_model(self) -> None:
         """Initialize and load the TTS model.
 
@@ -143,10 +165,10 @@ class FastAPIServer:
             self.logger.info(f"Device not specified, using device automatically: {device}")
         else:
             device = self.device
-        if self.checkpoint_dir is not None:
+        if self.checkpoint_dir is not None and os.path.exists(self.checkpoint_dir):
             self.tts_model = ChatterboxMultilingualTTS.from_local(self.checkpoint_dir, device)
         else:
-            msg = "Checkpoint directory not specified, using pretrained model"
+            msg = "Checkpoint directory not specified or does not exist, using pretrained model"
             self.logger.info(msg)
             self.tts_model = ChatterboxMultilingualTTS.from_pretrained(device)
 
@@ -154,8 +176,7 @@ class FastAPIServer:
         """Add API routes to the router.
 
         This method registers all HTTP endpoints with the provided FastAPI router,
-        including user management, character configuration, health checks,
-        and log file access endpoints.
+        including voice listing, audio generation, health checks, and root redirect.
 
         Args:
             router (APIRouter):
@@ -201,7 +222,8 @@ class FastAPIServer:
         """Redirect to API documentation.
 
         Returns:
-            RedirectResponse: Redirect response to /docs endpoint.
+            RedirectResponse:
+                Redirect response to /docs endpoint.
         """
         return RedirectResponse(url="/docs")
 
@@ -222,6 +244,9 @@ class FastAPIServer:
     async def list_voice_names(self) -> ListVoiceNameResponse:
         """List all available voice names.
 
+        Scans the audio prompts directory and returns all available
+        voice configurations that can be used for text-to-speech synthesis.
+
         Returns:
             ListVoiceNameResponse:
                 Response containing a dictionary mapping voice keys
@@ -239,7 +264,7 @@ class FastAPIServer:
         Synthesizes speech from the input text using the TTS model with
         the specified voice. If the voice prompt needs to be loaded,
         it will be prepared before generation. The generated audio is
-        returned as a WAV file.
+        returned as a WAV file with appropriate download headers.
 
         Args:
             request (GenerateAudioRequest):
@@ -280,6 +305,8 @@ class FastAPIServer:
             content=wav_io.getvalue(),
             media_type='application/octet-stream')
         timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-        resp.headers[
-                'Content-Disposition'] = f'attachment; filename={request.voice_key}_{timestamp_str}.wav'
+        filename = f'{request.voice_key}_{timestamp_str}.wav'
+        # 使用 RFC 5987 标准编码文件名，支持非 ASCII 字符
+        encoded_filename = quote(filename, safe='')
+        resp.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
         return resp
