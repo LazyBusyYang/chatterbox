@@ -2,8 +2,8 @@ import argparse
 import os
 import sys
 
-from dlp3d.server import FastAPIServer
-from dlp3d.utils import file2dict
+from service.server import FastAPIServer
+from service.utils import file2dict
 
 
 def main(args) -> int:
@@ -50,14 +50,14 @@ def setup_parser():
     """
     parser = argparse.ArgumentParser(
         description='FastAPI server for text-to-speech audio generation',
-        epilog='Example: python main.py --config_path dlp3d/online_config.py'
+        epilog='Example: python main.py --config_path service/online_config.py'
     )
     # server args
     parser.add_argument(
         '--config_path',
         type=str,
         help='Path to the configuration file containing server settings',
-        default='dlp3d/online_config.py')
+        default='service/online_config.py')
     args = parser.parse_args()
     return args
 
