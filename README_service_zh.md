@@ -7,11 +7,11 @@
 Chatterbox TTS 服务提供基于 ChatterboxMultilingualTTS 模型的文本转语音合成 RESTful API。服务支持：
 
 - **23 种语言**的多语言零样本语音克隆
-- 基于参考音频提示的**零样本语音克隆**
+- 基于参考音频的**零样本语音克隆**
 - **PCM 格式 WAV 输出**（16 位有符号整数），具有最大兼容性
 - 基于 **FastAPI 的 REST API**，自动生成 API 文档
 - **CORS 支持**，支持跨域请求
-- **线程安全的模型推理**，带有语音提示缓存
+- **线程安全的模型推理**，带有参考音频缓存
 
 ### API 端点
 
@@ -20,13 +20,13 @@ Chatterbox TTS 服务提供基于 ChatterboxMultilingualTTS 模型的文本转�
 - `GET /health` - 健康检查端点
 - `GET /` - 重定向到 API 文档 `/docs`
 
-## 音频提示准备
+## 参考音频准备
 
-音频提示是用于零样本语音克隆的参考音频文件。每个提示文件定义一个可用于合成的音色。
+参考音频是用于零样本语音克隆的音色样本文件。每个参考音频文件定义一种可用于合成的音色，系统会模仿该音频中的声音特征来生成语音。
 
 ### 文件命名规范
 
-音频提示文件必须遵循以下命名模式：
+参考音频文件必须遵循以下命名模式：
 ```
 {voice_key}_{language_id}.wav
 ```
@@ -50,7 +50,7 @@ keqing_en.wav
 
 ### 目录结构
 
-将所有音频提示文件放在一个目录中（默认：`data/`）：
+将所有参考音频文件放在一个目录中（默认：`data/`）：
 
 ```
 data/
@@ -60,11 +60,11 @@ data/
 └── voice2_es.wav
 ```
 
-服务将在启动时自动扫描此目录并注册所有有效的音频提示。
+服务将在启动时自动扫描此目录并注册所有有效的参考音频。
 
-### 预设音频提示文件
+### 预设参考音频文件
 
-本仓库为 DLP3D 项目提供了预设的音频提示文件，包括部分角色的中英文音色参考音频文件。您可以从以下地址下载：
+本仓库为 DLP3D 项目提供了预设的参考音频文件，包括部分角色的中英文音色样本。您可以从以下地址下载：
 
 1. **百度网盘**：[https://pan.baidu.com/s/18Syh-_uwEoN-jVSDc--zBQ?pwd=r8ev](https://pan.baidu.com/s/18Syh-_uwEoN-jVSDc--zBQ?pwd=r8ev)
    - 输入提取密码：`r8ev`
@@ -74,7 +74,7 @@ data/
    - 直接下载 `voices.zip` 文件
    - 将内容解压到 `data/` 目录
 
-下载并解压后，音频提示文件即可使用。重启服务以注册它们。
+下载并解压后，参考音频文件即可使用。重启服务以注册它们。
 
 ### 添加新音色
 
@@ -159,9 +159,17 @@ weights/
 
 ### 构建 Docker 镜像
 
-服务包含支持 CUDA 的容器化部署 Dockerfile：
+**注意：** 对于 amd64 平台，您可以直接使用 Docker Hub 上预构建的镜像，无需本地构建：
 
 ```bash
+# 选项 1：使用预构建镜像（amd64 平台推荐）
+docker pull dockersenseyang/service_chatterbox:latest
+```
+
+如果您需要自己构建镜像（例如，用于其他平台或自定义修改），服务包含支持 CUDA 的容器化部署 Dockerfile：
+
+```bash
+# 选项 2：从源码构建
 docker build -f service/Dockerfile -t dockersenseyang/service_chatterbox:latest .
 ```
 
@@ -219,7 +227,7 @@ docker run -d \
 ```python
 type = 'FastAPIServer'
 checkpoint_dir = "weights"          # 模型检查点路径
-audio_prompts_dir = "data"          # 音频提示文件路径
+audio_prompts_dir = "data"          # 参考音频文件路径
 host = '0.0.0.0'                    # 服务器主机
 port = 18085                        # 服务器端口
 logger_cfg = __logger_cfg__         # 日志配置
@@ -232,8 +240,8 @@ logger_cfg = __logger_cfg__         # 日志配置
    mkdir -p data weights logs
    ```
 
-2. **放置音频提示和检查点：**
-   - 将音频提示文件复制到 `data/`
+2. **放置参考音频和检查点：**
+   - 将参考音频文件复制到 `data/`
    - 将模型检查点文件复制到 `weights/`（或留空以使用 HuggingFace）
 
 3. **启动服务器：**

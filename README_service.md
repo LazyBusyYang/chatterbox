@@ -159,9 +159,17 @@ If no local checkpoint is provided, the service will automatically download the 
 
 ### Building the Docker Image
 
-The service includes a Dockerfile for containerized deployment with CUDA support:
+**Note:** For amd64 platforms, you can directly use the pre-built image from Docker Hub without building locally:
 
 ```bash
+# Option 1: Use pre-built image (recommended for amd64)
+docker pull dockersenseyang/service_chatterbox:latest
+```
+
+If you need to build the image yourself (e.g., for other platforms or custom modifications), the service includes a Dockerfile for containerized deployment with CUDA support:
+
+```bash
+# Option 2: Build from source
 docker build -f service/Dockerfile -t dockersenseyang/service_chatterbox:latest .
 ```
 
