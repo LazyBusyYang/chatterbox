@@ -2,7 +2,6 @@ import asyncio
 import io
 import os
 import time
-import wave
 from threading import Lock
 from urllib.parse import quote
 
@@ -293,17 +292,26 @@ class FastAPIServer:
             generate_start_time = time.time()
             tensor_wav = await asyncio.to_thread(self.tts_model.generate, request.text, language_id=language_id)
             generate_end_time = time.time()
+        # Calculate duration directly from tensor shape
+        duration = tensor_wav.shape[-1] / self.tts_model.sr
         wav_io = io.BytesIO()
-        await asyncio.to_thread(ta.save, wav_io, tensor_wav, self.tts_model.sr, format='wav')
+        # Save as PCM format WAV (16-bit signed integer) for compatibility
+        await asyncio.to_thread(
+            ta.save,
+            wav_io,
+            tensor_wav,
+            self.tts_model.sr,
+            format='wav',
+            encoding='PCM_S',
+            bits_per_sample=16
+        )
         wav_io.seek(0)
-        with wave.open(wav_io, 'rb') as wav_file:
-            duration = wav_file.getnframes() / wav_file.getframerate()
         self.logger.info(
             f"Generate time: {generate_end_time - generate_start_time:.2f} seconds " +
             f"for {request.voice_key}, duration: {duration:.2f} seconds")
         resp = Response(
             content=wav_io.getvalue(),
-            media_type='application/octet-stream')
+            media_type="audio/wav")
         timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
         filename = f'{request.voice_key}_{timestamp_str}.wav'
         # 使用 RFC 5987 标准编码文件名，支持非 ASCII 字符
