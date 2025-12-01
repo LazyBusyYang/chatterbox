@@ -57,7 +57,7 @@ def setup_parser():
         '--config_path',
         type=str,
         help='Path to the configuration file containing server settings',
-        default='service/online_config.py')
+        default='service/config.py')
     args = parser.parse_args()
     return args
 
