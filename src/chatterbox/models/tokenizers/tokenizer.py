@@ -229,7 +229,10 @@ class ChineseCangjieConverter:
             if category(t) == "Lo":
                 cangjie = self._cangjie_encode(t)
                 if cangjie is None:
-                    output.append(t)
+                    # 避免将无法转换的字符加入输出，否则可能导致意外的杂音。
+                    # Do not append unconvertable characters to output,
+                    # otherwise it may cause unexpected noise.
+                    # output.append(t)
                     continue
                 code = []
                 for c in cangjie:

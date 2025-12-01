@@ -70,7 +70,7 @@ data/
    - 输入提取密码：`r8ev`
    - 下载 `voices.zip` 文件并解压到 `data/` 目录
 
-2. **GitHub Releases**：[https://github.com/LazyBusyYang/chatterbox/releases/download/dev/voices.zip](https://github.com/LazyBusyYang/chatterbox/releases/download/dev/voices.zip)
+2. **GitHub Releases**：[https://github.com/LazyBusyYang/chatterbox/releases/download/voices/voices.zip](https://github.com/LazyBusyYang/chatterbox/releases/download/voices/voices.zip)
    - 直接下载 `voices.zip` 文件
    - 将内容解压到 `data/` 目录
 

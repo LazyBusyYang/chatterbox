@@ -70,7 +70,7 @@ This repository provides pre-configured audio prompt files for DLP3D project, in
    - Enter extract password: `r8ev`
    - Download the `voices.zip` file and extract it to the `data/` directory
 
-2. **GitHub Releases**: [https://github.com/LazyBusyYang/chatterbox/releases/download/dev/voices.zip](https://github.com/LazyBusyYang/chatterbox/releases/download/dev/voices.zip)
+2. **GitHub Releases**: [https://github.com/LazyBusyYang/chatterbox/releases/download/voices/voices.zip](https://github.com/LazyBusyYang/chatterbox/releases/download/voices/voices.zip)
    - Direct download link for `voices.zip`
    - Extract the contents to the `data/` directory
 
