@@ -2,6 +2,7 @@ import asyncio
 import io
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from urllib.parse import quote
 
@@ -127,9 +128,14 @@ class FastAPIServer:
         self._build_tts_model()
         self.last_audio_prompt_key: str | None = None
         self.model_lock = Lock()
+        self.thread_pool = ThreadPoolExecutor(max_workers=1)
 
     def _load_audio_prompts(self) -> None:
-        """TODO
+        """Load audio prompt files from the configured directory.
+
+        Scans the audio prompts directory for WAV files following the naming
+        convention '{voice_key}_{language_id}.wav'. Valid files are registered
+        in the audio_prompts dictionary for use in voice synthesis.
         """
         self.audio_prompts = dict()
         for file in os.listdir(self.audio_prompts_dir):
@@ -170,6 +176,56 @@ class FastAPIServer:
             msg = "Checkpoint directory not specified or does not exist, using pretrained model"
             self.logger.info(msg)
             self.tts_model = ChatterboxMultilingualTTS.from_pretrained(device)
+
+    def _generate_audio(self, voice_key: str, text: str) -> io.BytesIO:
+        """Generate audio from text using the specified voice.
+
+        This method handles the core audio generation logic, including voice
+        prompt preparation, text-to-speech synthesis, and audio format conversion.
+        It uses thread-safe locking to ensure model access is serialized.
+
+        Args:
+            voice_key (str):
+                Voice key identifier matching an audio prompt file name
+                (without extension).
+            text (str):
+                Text content to synthesize into speech.
+
+        Returns:
+            io.BytesIO:
+                BytesIO buffer containing the generated WAV audio file
+                in PCM format (16-bit signed integer).
+        """
+        with self.model_lock:
+            if self.last_audio_prompt_key is None or \
+                    self.last_audio_prompt_key != voice_key:
+                audio_prompt_path = self.audio_prompts[voice_key]['path']
+                prepare_start_time = time.time()
+                self.tts_model.prepare_conditionals(audio_prompt_path)
+                prepare_end_time = time.time()
+                self.logger.info(f"Prepare time: {prepare_end_time - prepare_start_time:.2f} seconds for {voice_key}")
+                self.last_audio_prompt_key = voice_key
+            language_id = self.audio_prompts[voice_key]['language_id']
+            generate_start_time = time.time()
+            tensor_wav = self.tts_model.generate(text, language_id=language_id)
+            generate_end_time = time.time()
+            # Calculate duration directly from tensor shape
+            duration = tensor_wav.shape[-1] / self.tts_model.sr
+            wav_io = io.BytesIO()
+            # Save as PCM format WAV (16-bit signed integer) for compatibility
+            ta.save(
+                uri=wav_io,
+                src=tensor_wav,
+                sample_rate=self.tts_model.sr,
+                channels_first=True,
+                format='wav',
+                encoding='PCM_S',
+                bits_per_sample=16
+            )
+        self.logger.info(
+            f"Generate time: {generate_end_time - generate_start_time:.2f} seconds " +
+            f"for {voice_key}, duration: {duration:.2f} seconds")
+        return wav_io
 
     def _add_api_routes(self, router: APIRouter) -> None:
         """Add API routes to the router.
@@ -275,46 +331,20 @@ class FastAPIServer:
                 HTTP response containing the generated audio as a WAV
                 file with appropriate headers for download.
         """
-        with self.model_lock:            
-            if request.voice_key not in self.audio_prompts:
-                msg = f"Voice key {request.voice_key} not found"
-                self.logger.error(msg)
-                raise HTTPException(status_code=404, detail=msg)
-            if self.last_audio_prompt_key is None or \
-                    self.last_audio_prompt_key != request.voice_key:
-                audio_prompt_path = self.audio_prompts[request.voice_key]['path']
-                prepare_start_time = time.time()
-                await asyncio.to_thread(self.tts_model.prepare_conditionals, audio_prompt_path)
-                prepare_end_time = time.time()
-                self.logger.info(f"Prepare time: {prepare_end_time - prepare_start_time:.2f} seconds for {request.voice_key}")
-                self.last_audio_prompt_key = request.voice_key
-            language_id = self.audio_prompts[request.voice_key]['language_id']
-            generate_start_time = time.time()
-            tensor_wav = await asyncio.to_thread(self.tts_model.generate, request.text, language_id=language_id)
-            generate_end_time = time.time()
-        # Calculate duration directly from tensor shape
-        duration = tensor_wav.shape[-1] / self.tts_model.sr
-        wav_io = io.BytesIO()
-        # Save as PCM format WAV (16-bit signed integer) for compatibility
-        await asyncio.to_thread(
-            ta.save,
-            wav_io,
-            tensor_wav,
-            self.tts_model.sr,
-            format='wav',
-            encoding='PCM_S',
-            bits_per_sample=16
-        )
+        if request.voice_key not in self.audio_prompts:
+            msg = f"Voice key {request.voice_key} not found"
+            self.logger.error(msg)
+            raise HTTPException(status_code=404, detail=msg)
+        loop = asyncio.get_event_loop()
+        wav_io = await loop.run_in_executor(
+            self.thread_pool, self._generate_audio, request.voice_key, request.text)
         wav_io.seek(0)
-        self.logger.info(
-            f"Generate time: {generate_end_time - generate_start_time:.2f} seconds " +
-            f"for {request.voice_key}, duration: {duration:.2f} seconds")
         resp = Response(
             content=wav_io.getvalue(),
             media_type="audio/wav")
         timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
         filename = f'{request.voice_key}_{timestamp_str}.wav'
-        # 使用 RFC 5987 标准编码文件名，支持非 ASCII 字符
+        # Use RFC 5987 standard encoding for filename to support non-ASCII characters
         encoded_filename = quote(filename, safe='')
         resp.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
         return resp
