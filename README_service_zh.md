@@ -13,6 +13,22 @@ Chatterbox TTS 服务提供基于 ChatterboxMultilingualTTS 模型的文本转�
 - **CORS 支持**，支持跨域请求
 - **线程安全的模型推理**，带有参考音频缓存
 
+### 已知问题和限制
+
+> **⚠️ 重要提示：** ChatterboxMultilingualTTS 在非英语语言（特别是中文）上存在已知的质量问题。
+>
+> **中文语言问题：**
+> - 音频输出在结尾处经常出现意外的杂音，例如：
+>   - 超出预期长度的喘气声
+>   - 小声讲话或低音量语音
+>   - 其他音频杂音
+>
+> **其他语言：**
+> - 在 [GitHub issues](https://github.com/resemble-ai/chatterbox/issues/) 中，其他用户也反馈了各种非英语语言的类似问题
+>
+> **建议：**
+> - **目前，仅建议在英文上使用 Chatterbox.**
+
 ### API 端点
 
 - `GET /api/v1/list_voice_names` - 列出所有可用的语音配置

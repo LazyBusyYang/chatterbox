@@ -13,6 +13,22 @@ The Chatterbox TTS service provides a RESTful API for text-to-speech synthesis u
 - **CORS support** for cross-origin requests
 - **Thread-safe model inference** with voice prompt caching
 
+### Known Issues and Limitations
+
+> **⚠️ Important Notice:** ChatterboxMultilingualTTS has known quality issues with non-English languages, particularly Chinese.
+>
+> **Chinese Language Issues:**
+> - Audio outputs frequently contain unexpected artifacts at the end, such as:
+>   - Extended breathing sounds beyond expected length
+>   - Low-volume speech or whispering
+>   - Other audio artifacts
+>
+> **Other Languages:**
+> - Similar issues have been reported by other users for various non-English languages in the [GitHub issues](https://github.com/resemble-ai/chatterbox/issues/)
+>
+> **Recommendation:**
+> - **Currently, Chatterbox is only recommended for English language use.**
+
 ### API Endpoints
 
 - `GET /api/v1/list_voice_names` - List all available voice configurations
