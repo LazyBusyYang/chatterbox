@@ -1,20 +1,20 @@
 FROM ubuntu:20.04
 
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Asia/Shanghai
+
 # Install apt packages
 RUN apt-get update && \
     apt-get install -y \
-        ca-certificates wget curl git vim unzip ffmpeg \
+        ca-certificates wget curl git vim unzip ffmpeg tzdata \
         gcc g++ make \
+    && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
     && \
     apt-get autoclean
 
 # Set timezone
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && \
-    apt-get install -yq tzdata && \
-    dpkg-reconfigure -f noninteractive tzdata && \
-    ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    apt-get autoclean
+RUN dpkg-reconfigure -f noninteractive tzdata
 
 # Install uv and create a Python environment managed by uv.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
