@@ -3,7 +3,7 @@ FROM ubuntu:20.04
 # Install apt packages
 RUN apt-get update && \
     apt-get install -y \
-        ca-certificates wget curl git vim unzip \
+        ca-certificates wget curl git vim unzip ffmpeg \
         gcc g++ make \
     && \
     apt-get autoclean

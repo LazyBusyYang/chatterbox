@@ -305,6 +305,35 @@ curl -X POST http://localhost:18085/api/v1/generate_audio \
   --output output.wav
 ```
 
+### Generate Audio with an Uploaded Reference Prompt
+
+Use this endpoint when the caller wants to provide a temporary reference audio
+file for zero-shot voice cloning instead of choosing a pre-configured
+`voice_key`.
+
+```bash
+curl -X POST http://localhost:18085/api/v1/generate_audio_with_prompt \
+  -F "text=Hello, this is a cloned voice test." \
+  -F "language_id=en" \
+  -F "audio_prompt=@/path/to/reference_audio.wav" \
+  --output output.wav
+```
+
+Validation rules:
+
+- `text` is required, must not be empty, and must be no longer than 500
+  characters.
+- `language_id` must be one of the multilingual Chatterbox language IDs, such
+  as `en`, `zh`, `fr`, or `ja`.
+- `audio_prompt` must be present, non-empty, and no larger than 20 MB.
+- The service does not use a filename extension allowlist. The upload is
+  accepted only if `ffmpeg` can decode and convert it.
+- Uploaded audio is converted to a temporary mono WAV file at the model
+  reference sample rate. The converted duration must be between 2 and 30
+  seconds.
+- Uploaded prompt files are stored only in a temporary directory during the
+  request and are deleted automatically after generation.
+
 ### Python Client Example
 
 ```python
@@ -326,9 +355,22 @@ response = requests.post(
 
 with open("output.wav", "wb") as f:
     f.write(response.content)
+
+# Generate audio with an uploaded reference prompt
+with open("/path/to/reference_audio.wav", "rb") as prompt_file:
+    response = requests.post(
+        "http://localhost:18085/api/v1/generate_audio_with_prompt",
+        data={
+            "text": "Hello, this is a cloned voice test.",
+            "language_id": "en",
+        },
+        files={"audio_prompt": prompt_file},
+    )
+
+with open("output_with_prompt.wav", "wb") as f:
+    f.write(response.content)
 ```
 
 ## License
 
 This repository is a fork of [https://github.com/resemble-ai/chatterbox](https://github.com/resemble-ai/chatterbox) and follows the original repository's MIT License. See the LICENSE file for details.
-

@@ -1,8 +1,11 @@
 import asyncio
 import io
 import os
+import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Lock
 from urllib.parse import quote
 
@@ -12,16 +15,28 @@ import uvicorn
 from fastapi import (
     APIRouter,
     FastAPI,
+    File,
+    Form,
     HTTPException,
     Response,
+    UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+from chatterbox.mtl_tts import SUPPORTED_LANGUAGES
+from chatterbox.models.s3gen import S3GEN_SR
 
 from .utils import setup_logger
+
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_TEXT_LENGTH = 500
+MIN_PROMPT_SECONDS = 2
+MAX_PROMPT_SECONDS = 30
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 class ListVoiceNameResponse(BaseModel):
@@ -129,6 +144,7 @@ class FastAPIServer:
         self.last_audio_prompt_key: str | None = None
         self.model_lock = Lock()
         self.thread_pool = ThreadPoolExecutor(max_workers=1)
+        self.audio_thread_pool = ThreadPoolExecutor(max_workers=2)
 
     def _load_audio_prompts(self) -> None:
         """Load audio prompt files from the configured directory.
@@ -177,6 +193,29 @@ class FastAPIServer:
             self.logger.info(msg)
             self.tts_model = ChatterboxMultilingualTTS.from_pretrained(device)
 
+    def _encode_tensor_to_wav(self, tensor_wav: torch.Tensor) -> io.BytesIO:
+        """Encode a generated waveform tensor as PCM WAV bytes.
+
+        Args:
+            tensor_wav (torch.Tensor):
+                Generated waveform with channels first.
+
+        Returns:
+            io.BytesIO:
+                BytesIO buffer containing a PCM 16-bit WAV file.
+        """
+        wav_io = io.BytesIO()
+        ta.save(
+            uri=wav_io,
+            src=tensor_wav,
+            sample_rate=self.tts_model.sr,
+            channels_first=True,
+            format='wav',
+            encoding='PCM_S',
+            bits_per_sample=16
+        )
+        return wav_io
+
     def _generate_audio(self, voice_key: str, text: str) -> io.BytesIO:
         """Generate audio from text using the specified voice.
 
@@ -203,7 +242,10 @@ class FastAPIServer:
                 prepare_start_time = time.time()
                 self.tts_model.prepare_conditionals(audio_prompt_path)
                 prepare_end_time = time.time()
-                self.logger.info(f"Prepare time: {prepare_end_time - prepare_start_time:.2f} seconds for {voice_key}")
+                self.logger.info(
+                    f"Prepare time: {prepare_end_time - prepare_start_time:.2f} "
+                    f"seconds for {voice_key}"
+                )
                 self.last_audio_prompt_key = voice_key
             language_id = self.audio_prompts[voice_key]['language_id']
             generate_start_time = time.time()
@@ -211,21 +253,215 @@ class FastAPIServer:
             generate_end_time = time.time()
             # Calculate duration directly from tensor shape
             duration = tensor_wav.shape[-1] / self.tts_model.sr
-            wav_io = io.BytesIO()
-            # Save as PCM format WAV (16-bit signed integer) for compatibility
-            ta.save(
-                uri=wav_io,
-                src=tensor_wav,
-                sample_rate=self.tts_model.sr,
-                channels_first=True,
-                format='wav',
-                encoding='PCM_S',
-                bits_per_sample=16
-            )
+            wav_io = self._encode_tensor_to_wav(tensor_wav)
         self.logger.info(
             f"Generate time: {generate_end_time - generate_start_time:.2f} seconds " +
             f"for {voice_key}, duration: {duration:.2f} seconds")
         return wav_io
+
+    def _convert_audio_prompt(self, input_path: Path, output_path: Path) -> float:
+        """Convert an uploaded prompt audio file into the model reference format.
+
+        Args:
+            input_path (Path):
+                Path to the uploaded temporary file.
+            output_path (Path):
+                Path where the converted WAV file should be written.
+
+        Returns:
+            float:
+                Converted WAV duration in seconds.
+
+        Raises:
+            HTTPException:
+                Raised with status 400 when ffmpeg cannot decode/convert the file
+                or the converted audio does not meet validation requirements.
+        """
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(input_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(S3GEN_SR),
+            "-f",
+            "wav",
+            str(output_path),
+        ]
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            self.logger.exception("ffmpeg is not installed")
+            raise HTTPException(
+                status_code=500,
+                detail="Audio conversion backend is unavailable",
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            detail = exc.stderr.strip() or "Uploaded audio could not be decoded"
+            self.logger.warning(f"ffmpeg failed to convert uploaded audio: {detail}")
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded audio could not be decoded",
+            ) from exc
+
+        try:
+            audio_info = ta.info(str(output_path))
+            duration = audio_info.num_frames / audio_info.sample_rate
+        except Exception as exc:
+            self.logger.warning(f"Failed to inspect converted audio prompt: {exc}")
+            raise HTTPException(
+                status_code=400,
+                detail="Converted audio could not be inspected",
+            ) from exc
+
+        if audio_info.sample_rate <= 0 or audio_info.num_frames <= 0:
+            raise HTTPException(status_code=400, detail="Uploaded audio is empty")
+        if audio_info.sample_rate != S3GEN_SR or audio_info.num_channels != 1:
+            raise HTTPException(status_code=400, detail="Converted audio has an invalid format")
+        if duration < MIN_PROMPT_SECONDS or duration > MAX_PROMPT_SECONDS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Audio prompt duration must be between "
+                    f"{MIN_PROMPT_SECONDS} and {MAX_PROMPT_SECONDS} seconds"
+                ),
+            )
+        return duration
+
+    def _generate_audio_with_prompt(
+        self,
+        audio_prompt_path: str,
+        language_id: str,
+        text: str,
+    ) -> io.BytesIO:
+        """Generate audio using a temporary uploaded reference prompt.
+
+        Args:
+            audio_prompt_path (str):
+                Path to the converted temporary WAV prompt.
+            language_id (str):
+                Supported Chatterbox language identifier.
+            text (str):
+                Text content to synthesize.
+
+        Returns:
+            io.BytesIO:
+                BytesIO buffer containing generated PCM WAV audio.
+        """
+        with self.model_lock:
+            generate_start_time = time.time()
+            tensor_wav = self.tts_model.generate(
+                text,
+                language_id=language_id,
+                audio_prompt_path=audio_prompt_path,
+            )
+            generate_end_time = time.time()
+            duration = tensor_wav.shape[-1] / self.tts_model.sr
+            wav_io = self._encode_tensor_to_wav(tensor_wav)
+        self.logger.info(
+            f"Generate time: {generate_end_time - generate_start_time:.2f} seconds " +
+            f"for uploaded prompt, duration: {duration:.2f} seconds")
+        return wav_io
+
+    async def _save_uploaded_audio_prompt(self, upload: UploadFile, input_path: Path) -> int:
+        """Save an uploaded prompt file with a strict size limit.
+
+        Args:
+            upload (UploadFile):
+                Uploaded prompt audio file.
+            input_path (Path):
+                Temporary destination path.
+
+        Returns:
+            int:
+                Number of bytes written.
+
+        Raises:
+            HTTPException:
+                Raised with status 400 when the upload is empty or too large.
+        """
+        loop = asyncio.get_event_loop()
+        written = 0
+        with input_path.open("wb") as file:
+            while True:
+                chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Audio prompt file must be 20MB or smaller",
+                    )
+                await loop.run_in_executor(self.audio_thread_pool, file.write, chunk)
+        if written == 0:
+            raise HTTPException(status_code=400, detail="Audio prompt file must not be empty")
+        return written
+
+    def _validate_text(self, text: str | None) -> str:
+        """Validate and normalize text input for synthesis.
+
+        Args:
+            text (str):
+                Raw user-provided text.
+
+        Returns:
+            str:
+                Trimmed text.
+
+        Raises:
+            HTTPException:
+                Raised with status 400 when text is empty or too long.
+        """
+        if text is None:
+            raise HTTPException(status_code=400, detail="Text must not be empty")
+        normalized = text.strip()
+        if not normalized:
+            raise HTTPException(status_code=400, detail="Text must not be empty")
+        if len(normalized) > MAX_TEXT_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Text must be {MAX_TEXT_LENGTH} characters or fewer",
+            )
+        return normalized
+
+    def _validate_language_id(self, language_id: str | None) -> str:
+        """Validate and normalize a Chatterbox language identifier.
+
+        Args:
+            language_id (str):
+                Raw language identifier.
+
+        Returns:
+            str:
+                Lowercase language identifier.
+
+        Raises:
+            HTTPException:
+                Raised with status 400 when the language is unsupported.
+        """
+        if language_id is None:
+            raise HTTPException(status_code=400, detail="language_id is required")
+        normalized = language_id.strip().lower()
+        if normalized not in SUPPORTED_LANGUAGES:
+            supported_langs = ", ".join(sorted(SUPPORTED_LANGUAGES))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported language_id. Supported languages: {supported_langs}",
+            )
+        return normalized
 
     def _add_api_routes(self, router: APIRouter) -> None:
         """Add API routes to the router.
@@ -247,6 +483,11 @@ class FastAPIServer:
         router.add_api_route(
             "/api/v1/generate_audio",
             self.generate_audio,
+            methods=["POST"]
+        )
+        router.add_api_route(
+            "/api/v1/generate_audio_with_prompt",
+            self.generate_audio_with_prompt,
             methods=["POST"]
         )
         router.add_api_route(
@@ -345,6 +586,69 @@ class FastAPIServer:
         timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
         filename = f'{request.voice_key}_{timestamp_str}.wav'
         # Use RFC 5987 standard encoding for filename to support non-ASCII characters
+        encoded_filename = quote(filename, safe='')
+        resp.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
+        return resp
+
+    async def generate_audio_with_prompt(
+        self,
+        text: str | None = Form(None),
+        language_id: str | None = Form(None),
+        audio_prompt: UploadFile | None = File(None),
+    ) -> Response:
+        """Generate audio using an uploaded temporary reference prompt.
+
+        Args:
+            text (str):
+                Text to synthesize. Must be non-empty and at most 500 chars.
+            language_id (str):
+                Supported language identifier for multilingual synthesis.
+            audio_prompt (UploadFile):
+                Uploaded reference audio file. It is decoded by ffmpeg and
+                converted to mono WAV at S3GEN_SR before model inference.
+
+        Returns:
+            Response:
+                HTTP response containing generated audio as a WAV file.
+        """
+        normalized_text = self._validate_text(text)
+        normalized_language_id = self._validate_language_id(language_id)
+        if audio_prompt is None:
+            raise HTTPException(status_code=400, detail="audio_prompt file is required")
+
+        with tempfile.TemporaryDirectory(prefix="chatterbox_prompt_") as temp_dir:
+            temp_path = Path(temp_dir)
+            uploaded_path = temp_path / "uploaded_audio"
+            converted_path = temp_path / "prompt.wav"
+            await self._save_uploaded_audio_prompt(audio_prompt, uploaded_path)
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                self.audio_thread_pool,
+                self._convert_audio_prompt,
+                uploaded_path,
+                converted_path,
+            )
+            try:
+                wav_io = await loop.run_in_executor(
+                    self.thread_pool,
+                    self._generate_audio_with_prompt,
+                    str(converted_path),
+                    normalized_language_id,
+                    normalized_text,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                self.logger.exception("Failed to generate audio with uploaded prompt")
+                raise HTTPException(status_code=500, detail="Failed to generate audio") from exc
+
+        wav_io.seek(0)
+        resp = Response(
+            content=wav_io.getvalue(),
+            media_type="audio/wav")
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        filename = f'uploaded_prompt_{normalized_language_id}_{timestamp_str}.wav'
         encoded_filename = quote(filename, safe='')
         resp.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
         return resp

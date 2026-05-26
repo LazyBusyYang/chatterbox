@@ -305,6 +305,32 @@ curl -X POST http://localhost:18085/api/v1/generate_audio \
   --output output.wav
 ```
 
+### 使用上传参考音频生成音频
+
+当调用方希望临时上传一段参考音频进行 zero-shot voice cloning，而不是选择
+预置的 `voice_key` 时，可以使用该接口。
+
+```bash
+curl -X POST http://localhost:18085/api/v1/generate_audio_with_prompt \
+  -F "text=Hello, this is a cloned voice test." \
+  -F "language_id=en" \
+  -F "audio_prompt=@/path/to/reference_audio.wav" \
+  --output output.wav
+```
+
+校验规则：
+
+- `text` 必填，去除首尾空白后不能为空，长度不超过 500 个字符。
+- `language_id` 必须是 Chatterbox 多语言模型支持的语言 ID，例如 `en`、
+  `zh`、`fr`、`ja`。
+- `audio_prompt` 必须存在、非空，且文件大小不超过 20 MB。
+- 服务不使用文件扩展名白名单，也不信任 `content-type`；只有 `ffmpeg`
+  能够成功解码并转换的上传文件才会被接受。
+- 上传音频会被转换为临时的单声道 WAV，并使用模型参考音频采样率。转换后
+  的时长必须在 2 到 30 秒之间。
+- 上传的参考音频只会在本次请求的临时目录中保存，生成完成后自动删除，
+  不会注册为长期可用的 `voice_key`。
+
 ### Python 客户端示例
 
 ```python
@@ -326,9 +352,22 @@ response = requests.post(
 
 with open("output.wav", "wb") as f:
     f.write(response.content)
+
+# 使用上传参考音频生成音频
+with open("/path/to/reference_audio.wav", "rb") as prompt_file:
+    response = requests.post(
+        "http://localhost:18085/api/v1/generate_audio_with_prompt",
+        data={
+            "text": "Hello, this is a cloned voice test.",
+            "language_id": "en",
+        },
+        files={"audio_prompt": prompt_file},
+    )
+
+with open("output_with_prompt.wav", "wb") as f:
+    f.write(response.content)
 ```
 
 ## 许可证
 
 本仓库是 [https://github.com/resemble-ai/chatterbox](https://github.com/resemble-ai/chatterbox) 的 fork，遵循原仓库的 MIT License。详见 LICENSE 文件。
-
