@@ -239,7 +239,7 @@ class UploadPromptValidationTest(unittest.TestCase):
                     server._convert_audio_prompt(Path("input.bin"), Path("output.wav"))
                 self.assertEqual(format_exc.exception.status_code, 400)
 
-    def test_generate_audio_with_prompt_does_not_update_cached_voice_key(self):
+    def test_generate_audio_with_prompt_invalidates_cached_voice_key(self):
         server = make_server()
 
         wav = server._generate_audio_with_prompt(
@@ -249,7 +249,7 @@ class UploadPromptValidationTest(unittest.TestCase):
         )
 
         self.assertEqual(wav.getvalue(), b"wav")
-        self.assertEqual(server.last_audio_prompt_key, "cached_voice")
+        self.assertIsNone(server.last_audio_prompt_key)
         self.assertEqual(
             server.tts_model.calls,
             [

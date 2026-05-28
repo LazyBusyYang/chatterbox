@@ -361,6 +361,7 @@ class FastAPIServer:
                 BytesIO buffer containing generated PCM WAV audio.
         """
         with self.model_lock:
+            self.last_audio_prompt_key = None
             generate_start_time = time.time()
             tensor_wav = self.tts_model.generate(
                 text,
